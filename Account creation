@@ -1,59 +1,125 @@
-// server.js
-require('dotenv').config();
-const express = require('express');
-const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
 
-const app = express();
-app.use(express.json());
+import javax.validation.constraints.Email;
+import javax.validation.constraints.NotBlank;
+import java.util.Date;
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log("Connected to MongoDB"))
-  .catch(err => console.error("Could not connect to MongoDB:", err));
+@SpringBootApplication
+public class UserRegistrationApi {
 
-// User schema and model
-const userSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
-});
-
-const User = mongoose.model('User', userSchema);
-
-// Route to create a new account
-app.post('/api/register', async (req, res) => {
-  const { name, email, password } = req.body;
-
-  if (!name || !email || !password) {
-    return res.status(400).json({ error: "All fields are required" });
-  }
-
-  try {
-    // Check if the user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
+    public static void main(String[] args) {
+        SpringApplication.run(UserRegistrationApi.class, args);
     }
 
-    // Hash the password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
 
-    // Create a new user
-    const user = new User({ name, email, password: hashedPassword });
-    await user.save();
+@RestController
+@RequestMapping("/api")
+class UserController {
 
-    // Generate a JWT token
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
 
-    res.status(201).json({ message: "User created successfully", token });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Server error" });
-  }
-});
+    public UserController(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+    }
 
-// Start the server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    @PostMapping("/register")
+    public ResponseEntity<?> register(@RequestBody UserDTO userDTO) {
+        if (userDTO.getName() == null || userDTO.getEmail() == null || userDTO.getPassword() == null) {
+            return ResponseEntity.badRequest().body("All fields are required");
+        }
+
+        if (userRepository.findByEmail(userDTO.getEmail()).isPresent()) {
+            return ResponseEntity.badRequest().body("User already exists");
+        }
+
+        String hashedPassword = passwordEncoder.encode(userDTO.getPassword());
+
+        User user = new User();
+        user.setName(userDTO.getName());
+        user.setEmail(userDTO.getEmail());
+        user.setPassword(hashedPassword);
+        userRepository.save(user);
+
+        String token = Jwts.builder()
+                .setSubject(user.getId())
+                .setExpiration(new Date(System.currentTimeMillis() + 3600000))
+                .signWith(SignatureAlgorithm.HS256, System.getenv("JWT_SECRET"))
+                .compact();
+
+        return ResponseEntity.status(201).body(new TokenResponse("User created successfully", token));
+    }
+}
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
+
+@Document
+class User {
+
+    @Id
+    private String id;
+
+    @NotBlank
+    private String name;
+
+    @NotBlank
+    @Email
+    private String email;
+
+    @NotBlank
+    private String password;
+
+    // Getters and setters
+}
+
+import org.springframework.data.mongodb.repository.MongoRepository;
+import java.util.Optional;
+
+interface UserRepository extends MongoRepository<User, String> {
+    Optional<User> findByEmail(String email);
+}
+
+import javax.validation.constraints.Email;
+import javax.validation.constraints.NotBlank;
+
+class UserDTO {
+
+    @NotBlank
+    private String name;
+
+    @NotBlank
+    @Email
+    private String email;
+
+    @NotBlank
+    private String password;
+
+    // Getters and setters
+}
+
+class TokenResponse {
+    private String message;
+    private String token;
+
+    public TokenResponse(String message, String token) {
+        this.message = message;
+        this.token = token;
+    }
+
+    // Getters and setters
+}
